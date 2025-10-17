@@ -1,0 +1,7 @@
+streamlit
+pandas
+numpy
+matplotlib
+gymnasium
+gym-anytrading
+stable-baselines3
