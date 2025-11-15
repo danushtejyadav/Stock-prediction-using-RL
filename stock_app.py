@@ -1,6 +1,7 @@
 import streamlit as st
 import gymnasium as gym
 import gym_anytrading
+import yfinance as yf
 
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3 import DQN
@@ -9,17 +10,29 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 
-st.title('Stock Prediction Model using RL')
+st.title('Stock Prediction Demo (RL)')
 
-# Use st.cache_resource to train the model only once
+# --- MODIFICATION: ADD A WARNING ---
+st.warning(
+    "**Demonstration Only:** To run on a free server, model training is "
+    "limited to 2,000 timesteps. These predictions are **not** suitable "
+    "for real-world trading and are for technical demonstration purposes only."
+)
+
+# Use st.cache_resource to train the model only once per dataset
 @st.cache_resource
 def train_model(df):
-    st.write("Training model... this will only run once.")
-    # Fixed training frame bound
-    training_frame_bound_start = 5
-    training_frame_bound_end = 150
+    st.write("Training model... (This will run once per dataset & cache)")
     window_size = 5
     
+    split_point = int(len(df) * 0.8)
+    training_frame_bound_start = window_size
+    training_frame_bound_end = split_point
+
+    if training_frame_bound_end <= training_frame_bound_start:
+        st.error("Not enough data to train. Please select a longer period.")
+        return None
+
     # Create training environment
     env_maker = lambda: gym.make(
         'stocks-v0', 
@@ -29,54 +42,76 @@ def train_model(df):
     )
     env = DummyVecEnv([env_maker])
     
-    # Train the model
-    model = DQN('MlpPolicy', env, verbose=0) # Set verbose to 0 for a cleaner UI
-    model.learn(total_timesteps=100000)
+    # --- MODIFICATION: REDUCE TIMESTEPS ---
+    # We change 100,000 to 2,000 to prevent a server crash on the free tier.
+    # This is the "appropriate measure" to handle the memory/CPU limitation.
+    model = DQN('MlpPolicy', env, verbose=0) 
+    model.learn(total_timesteps=2000) # Reduced from 100,000
+    
+    st.write("Model training complete.")
     return model
 
-# File upload
-uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
+# --- Sidebar for data fetching ---
+st.sidebar.header("Data Source")
+ticker = st.sidebar.text_input("Stock Ticker", "AAPL")
+period = st.sidebar.selectbox("Period", ["1y", "2y", "5y", "max"])
 
-if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
-    st.write("Data Preview:")
-    st.write(df.head())
+if st.sidebar.button("Fetch Data & Train Model"):
+    try:
+        # Fetch data using yfinance
+        data = yf.Ticker(ticker)
+        df = data.history(period=period)
+        
+        if df.empty:
+            st.error("Could not fetch data. Check the ticker or try again.")
+        else:
+            st.write(f"Fetched {len(df)} data points for {ticker}.")
+            st.write("Data Preview:")
+            st.write(df.head())
 
-    # Ensure 'Date' column exists before processing
-    if 'Date' in df.columns:
-        try:
-            df['Date'] = pd.to_datetime(df['Date'])
-            df.set_index('Date', inplace=True)
-        except Exception as e:
-            st.error(f"Error processing the 'Date' column: {e}")
-            st.stop()
-    else:
-        st.error("CSV file must contain a 'Date' column.")
-        st.stop()
+            # Train or load the cached model
+            model = train_model(df)
+            
+            if model is not None:
+                # Store the model and data in session state to use in evaluation
+                st.session_state.model = model
+                st.session_state.df = df
+                st.session_state.data_fetched = True
+                st.sidebar.success("Model trained successfully!")
 
-    # Display the trading environment settings
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
+
+# --- Evaluation section only appears after model is trained ---
+if 'data_fetched' in st.session_state and st.session_state.data_fetched:
+    
+    # Load data and model from session state
+    df = st.session_state.df
+    model = st.session_state.model
+
+    # Set default evaluation frame (last 20%)
+    split_point = int(len(df) * 0.8)
+
     st.sidebar.header("Evaluation Settings")
     frame_bound_start = st.sidebar.number_input(
         "Evaluation Start Point", 
         min_value=0, 
         max_value=len(df)-1, 
-        value=100
+        value=split_point # Default to start of test set
     )
     frame_bound_end = st.sidebar.number_input(
         "Evaluation End Point", 
         min_value=0, 
         max_value=len(df)-1, 
-        value=len(df)-1
+        value=len(df)-1 # Default to end of data
     )
     
     window_size = 5  # Fixed window size
 
     if st.sidebar.button("Run Evaluation"):
-        # Train or load the cached model
-        model = train_model(df)
-        
-        # Create evaluation environment with user-provided frame bounds
         st.write(f"Evaluating model from index {frame_bound_start} to {frame_bound_end}...")
+        
+        # Create evaluation environment
         env = gym.make(
             'stocks-v0', 
             df=df, 
@@ -95,9 +130,8 @@ if uploaded_file is not None:
                 st.json(info) # Use st.json for nicely formatted dictionary output
                 break
         
-        # --- FIX IS HERE ---
         st.write("### Trading Visualization")
         plt.figure(figsize=(15, 6))
-        plt.cla()  # Clear the plot to prevent overlapping visuals on re-runs
+        plt.cla()  
         env.unwrapped.render_all()
-        st.pyplot(plt.gcf())  # gcf() gets the current figure that render_all() drew on
+        st.pyplot(plt.gcf())

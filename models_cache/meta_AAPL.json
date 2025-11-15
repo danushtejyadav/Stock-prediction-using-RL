@@ -1,0 +1,11 @@
+{
+  "ticker": "AAPL",
+  "timesteps": 20000,
+  "period": "2y",
+  "features": [
+    "Close",
+    "return",
+    "ma_5",
+    "ma_20"
+  ]
+}
