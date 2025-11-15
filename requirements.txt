@@ -6,3 +6,4 @@ gymnasium
 gym-anytrading
 stable-baselines3
 huggingface_hub
+yfinance 
